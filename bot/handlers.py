@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Dict, List
 
+from openai import OpenAIError
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.ext import (
     Application,
@@ -212,12 +214,34 @@ class BotHandler:
         await update.message.reply_text("Хиймэл оюун ухаанаас зөвлөгөө авч байна...")
 
         category: IssueCategory = context.user_data["issue_category"]
-        guidance = await context.application.run_in_executor(
-            None,
-            self._ai.generate_guidance,
-            category.title,
-            description,
-        )
+        try:
+            guidance = await context.application.run_in_executor(
+                None,
+                self._ai.generate_guidance,
+                category.title,
+                description,
+            )
+        except OpenAIError:  # pragma: no cover - network failure
+            logging.exception("Failed to obtain AI guidance from OpenAI")
+            self._database.mark_status(call_id, "awaiting_manager")
+            await update.message.reply_text(
+                "Одоогоор хиймэл оюун ухааны зөвлөгөө өгөх боломжгүй байна. "
+                "Манай менежерт мэдэгдэж, инженерүүдэд шууд шилжүүлж байна.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            await self._escalate(update, context, call_id)
+            return ConversationHandler.END
+        except Exception:  # pragma: no cover - defensive
+            logging.exception("Unexpected error while obtaining AI guidance")
+            self._database.mark_status(call_id, "awaiting_manager")
+            await update.message.reply_text(
+                "Одоогоор хиймэл оюун ухааны зөвлөгөө өгөх боломжгүй байна. "
+                "Манай менежерт мэдэгдэж, инженерүүдэд шууд шилжүүлж байна.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            await self._escalate(update, context, call_id)
+            return ConversationHandler.END
+
         self._database.update_ai_guidance(call_id, guidance)
         context.user_data["ai_guidance"] = guidance
 
