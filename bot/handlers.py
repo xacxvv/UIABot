@@ -371,6 +371,25 @@ class BotHandler:
             for status, count in summary["statuses"]:
                 lines.append(f"- {status}: {count}")
 
+        engineer_rows = {name: (total, resolved) for name, total, resolved in summary["by_engineer"]}
+        if self._config.engineers:
+            lines.append("\nИнженерүүдээр:")
+            for engineer in self._config.engineers:
+                total, resolved = engineer_rows.get(engineer.name, (0, 0))
+                lines.append(
+                    f"- {engineer.name}: нийт {total} дуудлага, шийдвэрлэсэн {resolved}"
+                )
+
+            extra_engineers = [
+                name for name in engineer_rows.keys()
+                if name not in {engineer.name for engineer in self._config.engineers}
+            ]
+            for name in extra_engineers:
+                total, resolved = engineer_rows[name]
+                lines.append(
+                    f"- {name}: нийт {total} дуудлага, шийдвэрлэсэн {resolved}"
+                )
+
         await update.message.reply_text("\n".join(lines))
 
     async def cancel(

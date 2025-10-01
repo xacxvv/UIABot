@@ -212,11 +212,24 @@ class Database:
             statuses = conn.execute(
                 "SELECT status, COUNT(*) FROM calls GROUP BY status"
             ).fetchall()
+            by_engineer = conn.execute(
+                """
+                SELECT assigned_engineer,
+                       COUNT(*) AS total_calls,
+                       SUM(CASE WHEN status LIKE 'resolved%' THEN 1 ELSE 0 END) AS resolved_calls
+                FROM calls
+                WHERE assigned_engineer IS NOT NULL
+                GROUP BY assigned_engineer
+                """
+            ).fetchall()
 
         return {
             "total": int(total_calls),
             "by_department": [(row[0], int(row[1])) for row in by_department],
             "by_issue": [(row[0], int(row[1])) for row in by_issue],
             "statuses": [(row[0], int(row[1])) for row in statuses],
+            "by_engineer": [
+                (row[0], int(row[1]), int(row[2] or 0)) for row in by_engineer
+            ],
         }
 
