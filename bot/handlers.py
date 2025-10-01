@@ -8,9 +8,16 @@ from enum import Enum, auto
 from typing import Dict, List
 
 from openai import OpenAIError
-from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    Update,
+)
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ConversationHandler,
     ContextTypes,
@@ -19,7 +26,7 @@ from telegram.ext import (
 )
 
 from .ai import AIAssistant
-from .config import BotConfig
+from .config import BotConfig, Engineer
 from .database import Database
 
 
@@ -298,6 +305,7 @@ class BotHandler:
 
         summary = "".join(summary_lines)
         engineers = self._config.engineers
+        reply_markup: InlineKeyboardMarkup | None = None
 
         if engineers:
             loads = self._database.engineer_loads([engineer.name for engineer in engineers])
@@ -309,9 +317,20 @@ class BotHandler:
             summary += "\n".join(load_lines)
             engineer_names = ", ".join(engineer.name for engineer in engineers)
             summary += (
-                "\n\nИнженер оноохын тулд дараах командыг ашиглана уу:\n"
-                f"/assign {call_id} <инженерийн нэр>\n"
+                "\n\nИнженер оноохын тулд доорх товчийг дарна уу "
+                f"эсвэл /assign {call_id} <инженерийн нэр> гэж оруулна уу.\n"
                 f"Боломжит инженерүүд: {engineer_names}"
+            )
+            reply_markup = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            text=engineer.name,
+                            callback_data=f"assign:{call_id}:{index}",
+                        )
+                    ]
+                    for index, engineer in enumerate(engineers)
+                ]
             )
         else:
             summary += (
@@ -321,6 +340,7 @@ class BotHandler:
         await context.bot.send_message(
             chat_id=self._config.manager_chat_id,
             text=summary,
+            reply_markup=reply_markup,
         )
 
         await update.message.reply_text(
@@ -418,6 +438,72 @@ class BotHandler:
             await update.message.reply_text("Ийм дуудлага олдсонгүй.")
             return
 
+        await self._complete_assignment(
+            call_id=call_id,
+            call=call,
+            engineer=engineer,
+            manager_message=update.message,
+            context=context,
+        )
+
+    async def handle_assign_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        query = update.callback_query
+        if not query or not query.data:
+            return
+
+        await query.answer()
+
+        if not query.data.startswith("assign:"):
+            return
+
+        if query.from_user.id != self._config.manager_chat_id:
+            await query.answer("Энэ товчийг ашиглах эрхгүй байна.", show_alert=True)
+            return
+
+        parts = query.data.split(":", 2)
+        if len(parts) != 3:
+            return
+
+        try:
+            call_id = int(parts[1])
+            engineer_index = int(parts[2])
+        except ValueError:
+            return
+
+        try:
+            engineer = self._config.engineers[engineer_index]
+        except IndexError:
+            await query.message.reply_text(
+                "Сонгосон инженерийн мэдээлэл хүчингүй боллоо."
+            )
+            return
+
+        call = self._database.get_call(call_id)
+        if not call:
+            await query.message.reply_text("Ийм дуудлага олдсонгүй.")
+            return
+
+        await query.edit_message_reply_markup(reply_markup=None)
+
+        await self._complete_assignment(
+            call_id=call_id,
+            call=call,
+            engineer=engineer,
+            manager_message=query.message,
+            context=context,
+        )
+
+    async def _complete_assignment(
+        self,
+        *,
+        call_id: int,
+        call: Dict[str, object],
+        engineer: Engineer,
+        manager_message,
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> None:
         previous_engineer = call.get("assigned_engineer")
 
         self._database.assign_engineer(call_id, engineer.name)
@@ -427,7 +513,7 @@ class BotHandler:
         employee_details = None
         employee_code = call.get("employee_code")
         if employee_code:
-            employee_details = self._database.get_employee_by_code(employee_code)
+            employee_details = self._database.get_employee_by_code(str(employee_code))
 
         summary_lines = [
             f"Дуудлага #{call_id} - {call['user_full_name']} инженер {engineer.name}-д оноолоо.",
@@ -435,7 +521,7 @@ class BotHandler:
         ]
         if previous_engineer and previous_engineer != engineer.name:
             summary_lines.append(f"Өмнөх оноолт: {previous_engineer}")
-        await update.message.reply_text("\n".join(summary_lines))
+        await manager_message.reply_text("\n".join(summary_lines))
 
         message_lines = [
             "Танд шинэ дуудлага оноолоо.\n",
@@ -451,7 +537,7 @@ class BotHandler:
         description = call.get("issue_description") or "Дэлгэрэнгүй мэдээлэл ирээгүй"
         message_lines.append(f"- Дэлгэрэнгүй: {description}\n")
         if call.get("ai_guidance"):
-            message_lines.append("\n- AI зөвлөгөө:\n" + call["ai_guidance"])
+            message_lines.append("\n- AI зөвлөгөө:\n" + str(call["ai_guidance"]))
 
         engineer_message = "".join(message_lines)
         try:
@@ -513,6 +599,9 @@ def build_application(config: BotConfig, database: Database, ai: AIAssistant) ->
     application = Application.builder().token(config.telegram_token).build()
     application.add_handler(conversation)
     application.add_handler(CommandHandler("report", handler.report))
+    application.add_handler(
+        CallbackQueryHandler(handler.handle_assign_callback, pattern=r"^assign:")
+    )
     application.add_handler(CommandHandler("assign", handler.assign_call))
 
     return application
