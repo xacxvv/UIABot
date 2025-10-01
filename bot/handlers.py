@@ -277,34 +277,7 @@ class BotHandler:
     async def _escalate(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE, call_id: int
     ) -> None:
-        engineers = self._config.engineers
-        if not engineers:
-            await update.message.reply_text(
-                "Одоогоор инженерийн мэдээлэл бүртгэгдээгүй байна. Менежерт мэдэгдэнэ.",
-                reply_markup=ReplyKeyboardRemove(),
-            )
-            self._database.mark_status(call_id, "awaiting_manager")
-            category: IssueCategory = context.user_data["issue_category"]
-            employee = context.user_data["employee"]
-            await context.bot.send_message(
-                chat_id=self._config.manager_chat_id,
-                text=(
-                    "Инженерийн жагсаалт тохируулагдаагүй тул дуудлага автоматаар оноогдсонгүй.\n"
-                    f"- Дуудлагын ID: {call_id}\n"
-                    f"- Ажилтан: {context.user_data['full_name']}\n"
-                    f"- Ажилтны код: {employee['code']}\n"
-                    f"- Албан тушаал: {employee['position']}\n"
-                    f"- Утас: {employee['phone']}\n"
-                    f"- Бүтцийн нэгж: {context.user_data['department']}\n"
-                    f"- Асуудлын төрөл: {category.title}\n"
-                    f"- Дэлгэрэнгүй: {context.user_data.get('issue_description', 'бүртгэгдээгүй')}"
-                ),
-            )
-            return
-
-        loads = self._database.engineer_loads([engineer.name for engineer in engineers])
-        selected = min(engineers, key=lambda eng: loads.get(eng.name, 0))
-        self._database.assign_engineer(call_id, selected.name)
+        self._database.mark_status(call_id, "awaiting_manager")
 
         category: IssueCategory = context.user_data["issue_category"]
         employee = context.user_data["employee"]
@@ -318,31 +291,40 @@ class BotHandler:
             f"- Утас: {employee['phone']}\n",
             f"- Асудлын төрөл: {category.title}\n",
             f"- Дэлгэрэнгүй: {context.user_data.get('issue_description', 'бүртгэгдээгүй')}\n",
-            f"- Оноосон инженер: {selected.name}\n",
-            f"- Өнөөдрийн ачаалал: {loads.get(selected.name, 0) + 1} дуудлага",
         ]
         ai_guidance = context.user_data.get("ai_guidance")
         if ai_guidance:
             summary_lines.append("\n- AI зөвлөгөө:\n" + ai_guidance)
+
         summary = "".join(summary_lines)
+        engineers = self._config.engineers
+
+        if engineers:
+            loads = self._database.engineer_loads([engineer.name for engineer in engineers])
+            load_lines = ["\nОдоогийн ачаалал:"]
+            for engineer in engineers:
+                load_lines.append(
+                    f"- {engineer.name}: өнөөдөр {loads.get(engineer.name, 0)} дуудлага"
+                )
+            summary += "\n".join(load_lines)
+            engineer_names = ", ".join(engineer.name for engineer in engineers)
+            summary += (
+                "\n\nИнженер оноохын тулд дараах командыг ашиглана уу:\n"
+                f"/assign {call_id} <инженерийн нэр>\n"
+                f"Боломжит инженерүүд: {engineer_names}"
+            )
+        else:
+            summary += (
+                "\n\nИнженерийн жагсаалт тохируулагдаагүй байна."
+            )
 
         await context.bot.send_message(
             chat_id=self._config.manager_chat_id,
             text=summary,
         )
-        try:
-            await context.bot.send_message(
-                chat_id=selected.chat_id,
-                text=(
-                    f"Танд шинэ дуудлага оноолоо.\n{summary}\n"
-                    "Дэлгэрэнгүйг системээс шалгана уу."
-                ),
-            )
-        except Exception:  # pragma: no cover - engineer chat might be invalid
-            pass
 
         await update.message.reply_text(
-            "Манай инженерүүд таныг удахгүй холбогдоно.",
+            "Таны мэдээллийг МТ-ийн төвийн даргад шилжүүллээ. Тэд удахгүй холбогдоно.",
             reply_markup=ReplyKeyboardRemove(),
         )
 
@@ -392,6 +374,104 @@ class BotHandler:
 
         await update.message.reply_text("\n".join(lines))
 
+    async def assign_call(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.effective_user.id != self._config.manager_chat_id:
+            await update.message.reply_text("Энэ коммандыг ашиглах эрхгүй байна.")
+            return
+
+        if len(context.args) < 2:
+            await update.message.reply_text(
+                "Хэрэглээ: /assign <дуудлагын ID> <инженерийн нэр>")
+            return
+
+        try:
+            call_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("Дуудлагын ID бүхэл тоо байх ёстой.")
+            return
+
+        engineer_name = " ".join(context.args[1:]).strip()
+        if not engineer_name:
+            await update.message.reply_text("Инженерийн нэрийг бүрэн оруулна уу.")
+            return
+
+        engineer = next(
+            (eng for eng in self._config.engineers if eng.name.lower() == engineer_name.lower()),
+            None,
+        )
+        if not engineer:
+            available = ", ".join(eng.name for eng in self._config.engineers)
+            if available:
+                message = (
+                    "Ийм нэртэй инженер байхгүй байна. Боломжит инженерүүд: "
+                    + available
+                )
+            else:
+                message = (
+                    "Инженерийн жагсаалт тохируулагдаагүй байна. ENGINEERS тохиргоог шалгана уу."
+                )
+            await update.message.reply_text(message)
+            return
+
+        call = self._database.get_call(call_id)
+        if not call:
+            await update.message.reply_text("Ийм дуудлага олдсонгүй.")
+            return
+
+        previous_engineer = call.get("assigned_engineer")
+
+        self._database.assign_engineer(call_id, engineer.name)
+        loads = self._database.engineer_loads([engineer.name])
+        current_load = loads.get(engineer.name, 0)
+
+        employee_details = None
+        employee_code = call.get("employee_code")
+        if employee_code:
+            employee_details = self._database.get_employee_by_code(employee_code)
+
+        summary_lines = [
+            f"Дуудлага #{call_id} - {call['user_full_name']} инженер {engineer.name}-д оноолоо.",
+            f"Өнөөдрийн ачаалал: {current_load} дуудлага.",
+        ]
+        if previous_engineer and previous_engineer != engineer.name:
+            summary_lines.append(f"Өмнөх оноолт: {previous_engineer}")
+        await update.message.reply_text("\n".join(summary_lines))
+
+        message_lines = [
+            "Танд шинэ дуудлага оноолоо.\n",
+            f"- Дуудлагын ID: {call_id}\n",
+            f"- Ажилтан: {call['user_full_name']}\n",
+            f"- Ажилтны код: {employee_code or 'тодорхойгүй'}\n",
+            f"- Бүтцийн нэгж: {call['department']}\n",
+            f"- Асуудлын төрөл: {call['issue_type']}\n",
+        ]
+        if employee_details:
+            message_lines.append(f"- Албан тушаал: {employee_details['position']}\n")
+            message_lines.append(f"- Утас: {employee_details['phone']}\n")
+        description = call.get("issue_description") or "Дэлгэрэнгүй мэдээлэл ирээгүй"
+        message_lines.append(f"- Дэлгэрэнгүй: {description}\n")
+        if call.get("ai_guidance"):
+            message_lines.append("\n- AI зөвлөгөө:\n" + call["ai_guidance"])
+
+        engineer_message = "".join(message_lines)
+        try:
+            await context.bot.send_message(
+                chat_id=engineer.chat_id,
+                text=engineer_message,
+            )
+        except Exception:  # pragma: no cover - defensive guard
+            pass
+
+        try:
+            await context.bot.send_message(
+                chat_id=call["telegram_user_id"],
+                text=(
+                    "Таны дуудлагад {name} инженер ажиллахаар боллоо."
+                ).format(name=engineer.name),
+            )
+        except Exception:  # pragma: no cover - defensive guard
+            pass
+
     async def cancel(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> ConversationState | int:
@@ -433,6 +513,7 @@ def build_application(config: BotConfig, database: Database, ai: AIAssistant) ->
     application = Application.builder().token(config.telegram_token).build()
     application.add_handler(conversation)
     application.add_handler(CommandHandler("report", handler.report))
+    application.add_handler(CommandHandler("assign", handler.assign_call))
 
     return application
 

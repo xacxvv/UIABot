@@ -181,6 +181,44 @@ class Database:
             )
             conn.commit()
 
+    def get_call(self, call_id: int) -> Optional[Dict[str, object]]:
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT id,
+                       employee_code,
+                       telegram_user_id,
+                       user_full_name,
+                       department,
+                       issue_type,
+                       basic_guidance,
+                       issue_description,
+                       ai_guidance,
+                       status,
+                       assigned_engineer
+                FROM calls
+                WHERE id = ?
+                """,
+                (call_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            keys = [
+                "id",
+                "employee_code",
+                "telegram_user_id",
+                "user_full_name",
+                "department",
+                "issue_type",
+                "basic_guidance",
+                "issue_description",
+                "ai_guidance",
+                "status",
+                "assigned_engineer",
+            ]
+            return dict(zip(keys, row))
+
     # Reporting ------------------------------------------------------------
     def _count_for_today(self, engineer_name: str) -> int:
         today = datetime.now(timezone.utc).date()
