@@ -1,7 +1,8 @@
 __pycache__/
 *.py[cod]
 .env
-venv/
 .env.local
+bot/local_settings.py
+venv/
 .data/
 *.db

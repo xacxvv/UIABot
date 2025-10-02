@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import os
@@ -52,6 +53,38 @@ def _load_engineers(raw: str | None) -> List[Engineer]:
             )
         engineers.append(Engineer(name=str(item["name"]), chat_id=int(item["chat_id"])))
     return engineers
+
+
+def apply_local_settings(module_name: str = "bot.local_settings") -> None:
+    """Populate environment variables from a Python settings module.
+
+    Operators who prefer to store configuration directly in code can create a
+    ``bot/local_settings.py`` file containing uppercase variables (for example
+    ``TELEGRAM_BOT_TOKEN = "123"``). When present the values are copied into the
+    environment unless they are already defined, preserving ad-hoc overrides.
+    Complex structures such as ``ENGINEERS`` can be expressed with native Python
+    literals and are serialized to JSON before being exported.
+    """
+
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError:
+        return
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Failed to import %s: %s", module_name, exc)
+        return
+
+    for key in dir(module):
+        if not key.isupper():
+            continue
+        value = getattr(module, key)
+        if value is None:
+            continue
+        if isinstance(value, (dict, list)):
+            serialized = json.dumps(value, ensure_ascii=False)
+        else:
+            serialized = str(value)
+        os.environ.setdefault(key, serialized)
 
 
 def load_env_file(path: str | None = None) -> None:
