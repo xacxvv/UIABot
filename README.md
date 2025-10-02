@@ -26,6 +26,7 @@
    | --- | --- |
    | `TELEGRAM_BOT_TOKEN` | Телеграм боты н токен |
    | `OPENAI_API_KEY` | OpenAI API түлхүүр |
+   | `OPENAI_MODEL` *(сонголттой)* | Ашиглах OpenAI загварын нэр (`gpt-4o-mini` анхдагч) |
    | `MANAGER_CHAT_ID` | Мэдээллийн технологийн төвийн даргын Telegram chat ID |
    | `ENGINEERS` | Инженерүүдийн жагсаалт. JSON массив хэлбэртэй, жишээ нь: `[{"name": "Инженер А", "chat_id": 123456789}]` |
    | `DATABASE_PATH` *(сонголттой)* | SQLite өгөгдлийн сангийн зам (`data/bot.db` анхдагч) |

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+
 from openai import OpenAI
+
+
+logger = logging.getLogger(__name__)
 
 
 class AIAssistant:
@@ -11,6 +16,22 @@ class AIAssistant:
     def __init__(self, api_key: str, model: str = "gpt-4o-mini") -> None:
         self._client = OpenAI(api_key=api_key)
         self._model = model
+
+    def verify_model(self) -> bool:
+        """Best-effort check that the configured model is accessible."""
+
+        try:
+            self._client.models.retrieve(self._model)
+        except Exception as exc:  # pragma: no cover - depends on external API
+            logger.warning(
+                "OpenAI rejected model '%s'. The bot may fail to respond until the "
+                "configuration is updated. Details: %s",
+                self._model,
+                exc,
+            )
+            return False
+
+        return True
 
     def generate_guidance(self, issue_type: str, description: str) -> str:
         """Generate a step-by-step troubleshooting guide."""

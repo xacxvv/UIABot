@@ -24,6 +24,7 @@ class BotConfig:
     openai_api_key: str
     manager_chat_id: int
     engineers: List[Engineer]
+    openai_model: str = "gpt-4o-mini"
     database_path: str = "data/bot.db"
 
 
@@ -64,6 +65,8 @@ def load_config() -> BotConfig:
         raise ValueError("MANAGER_CHAT_ID environment variable is required")
     manager_chat_id = int(manager_raw)
 
+    model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+
     engineers = _load_engineers(os.environ.get("ENGINEERS"))
 
     db_path = os.environ.get("DATABASE_PATH", "data/bot.db")
@@ -74,6 +77,7 @@ def load_config() -> BotConfig:
     return BotConfig(
         telegram_token=telegram_token,
         openai_api_key=openai_api_key,
+        openai_model=model,
         manager_chat_id=manager_chat_id,
         engineers=engineers,
         database_path=db_path,
