@@ -27,6 +27,7 @@ class Database:
                     user_full_name TEXT NOT NULL,
                     department TEXT NOT NULL,
                     issue_type TEXT NOT NULL,
+                    employee_code TEXT,
                     basic_guidance TEXT,
                     issue_description TEXT,
                     ai_guidance TEXT,
@@ -48,6 +49,16 @@ class Database:
             )
             conn.commit()
 
+            columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(calls)").fetchall()
+            }
+            if "employee_code" not in columns:
+                conn.execute(
+                    "ALTER TABLE calls ADD COLUMN employee_code TEXT"
+                )
+                conn.commit()
+
     @contextmanager
     def _get_connection(self) -> Iterable[sqlite3.Connection]:
         with self._lock:
@@ -64,6 +75,7 @@ class Database:
         full_name: str,
         department: str,
         issue_type: str,
+        employee_code: str | None,
         basic_guidance: str,
     ) -> int:
         with self._get_connection() as conn:
@@ -74,15 +86,17 @@ class Database:
                     user_full_name,
                     department,
                     issue_type,
+                    employee_code,
                     basic_guidance,
                     status
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     telegram_user_id,
                     full_name,
                     department,
                     issue_type,
+                    employee_code,
                     basic_guidance,
                     "basic_guidance_provided",
                 ),

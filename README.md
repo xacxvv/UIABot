@@ -28,6 +28,7 @@
    | `OPENAI_API_KEY` | OpenAI API түлхүүр |
    | `MANAGER_CHAT_ID` | Мэдээллийн технологийн төвийн даргын Telegram chat ID |
    | `ENGINEERS` | Инженерүүдийн жагсаалт. JSON массив хэлбэртэй, жишээ нь: `[{"name": "Инженер А", "chat_id": 123456789}]` |
+   | `EMPLOYEE_CODES` *(сонголттой)* | Дуудлага өгөхийг зөвшөөрсөн ажилтнуудын кодын JSON жагсаалт эсвэл объект. Жишээ нь: `["IT-001", "IT-002"]` |
    | `DATABASE_PATH` *(сонголттой)* | SQLite өгөгдлийн сангийн зам (`data/bot.db` анхдагч) |
 
    Linux/MacOS дээр жишээ тохиргоо:
@@ -37,7 +38,10 @@
    export OPENAI_API_KEY="sk-..."
    export MANAGER_CHAT_ID="987654321"
    export ENGINEERS='[{"name": "Инженер А", "chat_id": 111111111}, {"name": "Инженер Б", "chat_id": 222222222}]'
+   export EMPLOYEE_CODES='["IT-001", "IT-002"]'
    ```
+
+   `.env` файлуудад `KEY=VALUE` болон `export KEY=VALUE` аль алиныг нь ашиглаж болно — эхний утга давхар бичигдэхгүй.
 
 ## Ажиллуулах
 
