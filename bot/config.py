@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -47,6 +52,48 @@ def _load_engineers(raw: str | None) -> List[Engineer]:
             )
         engineers.append(Engineer(name=str(item["name"]), chat_id=int(item["chat_id"])))
     return engineers
+
+
+def load_env_file(path: str | None = None) -> None:
+    """Load environment variables from a dotenv-style file.
+
+    Parameters
+    ----------
+    path:
+        Optional override pointing to a file containing KEY=VALUE pairs. When
+        omitted the function looks for ``UIABOT_ENV_FILE`` in the environment
+        and falls back to ``.env`` located in the repository root.
+    """
+
+    candidate = path or os.environ.get("UIABOT_ENV_FILE", ".env")
+    candidate_path = Path(candidate)
+    if not candidate_path.is_absolute():
+        project_root = Path(__file__).resolve().parents[1]
+        candidate_path = project_root / candidate_path
+
+    if not candidate_path.exists():
+        return
+
+    try:
+        with candidate_path.open(encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    logger.warning("Ignoring malformed line in %s: %s", candidate_path, raw_line.rstrip())
+                    continue
+
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip()
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+                    value = value[1:-1]
+
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except OSError as exc:  # pragma: no cover - defensive
+        logger.warning("Failed to load environment file %s: %s", candidate_path, exc)
 
 
 def load_config() -> BotConfig:
