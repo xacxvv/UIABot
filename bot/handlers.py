@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Dict, List
@@ -19,6 +20,9 @@ from telegram.ext import (
 from .ai import AIAssistant
 from .config import BotConfig
 from .database import Database
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -269,7 +273,6 @@ class BotHandler:
 
         loads = self._database.engineer_loads([engineer.name for engineer in engineers])
         selected = min(engineers, key=lambda eng: loads.get(eng.name, 0))
-        self._database.assign_engineer(call_id, selected.name)
 
         category: IssueCategory = context.user_data["issue_category"]
         summary_lines = [
@@ -291,6 +294,7 @@ class BotHandler:
             chat_id=self._config.manager_chat_id,
             text=summary,
         )
+
         try:
             await context.bot.send_message(
                 chat_id=selected.chat_id,
@@ -299,8 +303,28 @@ class BotHandler:
                     "Дэлгэрэнгүйг системээс шалгана уу."
                 ),
             )
-        except Exception:  # pragma: no cover - engineer chat might be invalid
-            pass
+        except Exception as exc:  # pragma: no cover - engineer chat might be invalid
+            logger.exception(
+                "Failed to notify engineer '%s' about call %s", selected.name, call_id
+            )
+            self._database.mark_status(call_id, "awaiting_manager")
+            await context.bot.send_message(
+                chat_id=self._config.manager_chat_id,
+                text=(
+                    "⚠️ Инженерийн чат руу мэдэгдэл илгээх үед алдаа гарлаа.\n"
+                    f"- Дуудлагын ID: {call_id}\n"
+                    f"- Инженер: {selected.name}\n"
+                    f"- Алдааны тайлбар: {exc}"
+                ),
+            )
+            await update.message.reply_text(
+                "Инженерт автоматаар мэдэгдэхэд алдаа гарлаа. Менежер таньтай удахгүй "
+                "холбогдоно.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            return
+
+        self._database.assign_engineer(call_id, selected.name)
 
         await update.message.reply_text(
             "Манай инженерүүд таныг удахгүй холбогдоно.",
