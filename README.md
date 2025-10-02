@@ -40,6 +40,24 @@
    export ENGINEERS='[{"name": "Инженер А", "chat_id": 111111111}, {"name": "Инженер Б", "chat_id": 222222222}]'
    ```
 
+   `systemd` сервис үүсгэхдээ эдгээр хувьсагчдыг `[Service]` хэсэгт `Environment=` мөрөөр тодорхой зааж өгөөрэй. Жишээ нь:
+
+   ```ini
+   [Service]
+   Environment=TELEGRAM_BOT_TOKEN=123:abc
+   Environment=OPENAI_API_KEY=sk-...
+   Environment=OPENAI_MODEL=gpt-4o-mini
+   Environment=MANAGER_CHAT_ID=987654321
+   Environment=ENGINEERS=[{"name":"Инженер А","chat_id":111111111}]
+   ```
+
+   OpenAI API-т холбогдож буй эсэхийг дараах тушаалаар хурдан шалгаж болно:
+
+   ```bash
+   curl -s https://api.openai.com/v1/models \
+     -H "Authorization: Bearer $OPENAI_API_KEY" | head
+   ```
+
 ## Ажиллуулах
 
 ```bash

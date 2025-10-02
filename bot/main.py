@@ -20,7 +20,12 @@ def main() -> None:
     config = load_config()
     database = Database(config.database_path)
     assistant = AIAssistant(config.openai_api_key, model=config.openai_model)
-    assistant.verify_model()
+    if not assistant.verify_model():
+        logging.error(
+            "Configured OpenAI model '%s' is not accessible. Update OPENAI_MODEL or the API key.",
+            config.openai_model,
+        )
+        raise SystemExit(1)
     application = build_application(config, database, assistant)
     application.run_polling()
 
