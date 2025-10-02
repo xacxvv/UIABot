@@ -26,17 +26,68 @@
    | --- | --- |
    | `TELEGRAM_BOT_TOKEN` | Телеграм боты н токен |
    | `OPENAI_API_KEY` | OpenAI API түлхүүр |
+   | `OPENAI_MODEL` *(сонголттой)* | Ашиглах OpenAI загварын нэр (`gpt-4o-mini` анхдагч) |
    | `MANAGER_CHAT_ID` | Мэдээллийн технологийн төвийн даргын Telegram chat ID |
    | `ENGINEERS` | Инженерүүдийн жагсаалт. JSON массив хэлбэртэй, жишээ нь: `[{"name": "Инженер А", "chat_id": 123456789}]` |
    | `DATABASE_PATH` *(сонголттой)* | SQLite өгөгдлийн сангийн зам (`data/bot.db` анхдагч) |
 
-   Linux/MacOS дээр жишээ тохиргоо:
+   Хувьсагч бүрийг гараар экспорт хийхийн оронд төслийн үндсэн хавтсанд `.env` файл үүсгэж дараах хэлбэрээр хадгалахад бот автоматаар уншина:
+
+   ```dotenv
+   TELEGRAM_BOT_TOKEN=123456:ABC...
+   OPENAI_API_KEY=sk-...
+   OPENAI_MODEL=gpt-4o-mini
+   MANAGER_CHAT_ID=987654321
+   ENGINEERS=[{"name": "Инженер А", "chat_id": 111111111}, {"name": "Инженер Б", "chat_id": 222222222}]
+   ```
+
+   `ENGINEERS` зэрэг JSON массивыг нэг мөрөнд хадгалахыг анхаарна уу.
+
+   Эсвэл `bot/local_settings.py` файлыг ашиглан тохиргоог шууд кодон дотроо хадгалж болно. `bot/local_settings.example.py`-г хуулбарлаж нэрийг нь `local_settings.py` болгон өөрчлөөд доорх шиг утгуудыг тохируулна:
+
+   ```python
+   TELEGRAM_BOT_TOKEN = "123456:ABC-DEF"
+   OPENAI_API_KEY = "sk-..."
+   MANAGER_CHAT_ID = 987654321
+   ENGINEERS = [
+       {"name": "Инженер А", "chat_id": 111111111},
+       {"name": "Инженер Б", "chat_id": 222222222},
+   ]
+   ```
+
+   Том үсгээр нэрлэсэн хувьсагч бүрийг бот ажиллахдаа автоматаар орчны хувьсагч болгон экспортлох тул нэмэлт `export` тушаал өгөх шаардлагагүй. Ийм аргаар хадгалсан нууц мэдээлэл нь репозиторт орохгүй байхаар `.gitignore`-т `bot/local_settings.py` аль хэдийн нэмэгдсэн эсэхийг шалгаарай.
+
+   Хэрэв `.env` файлын байрлалыг өөрчлөх шаардлагатай бол ботыг ажиллуулахын өмнө `UIABOT_ENV_FILE` хувьсагчид өөр зам зааж өгөөрэй. Жишээ нь:
+
+   ```bash
+   export UIABOT_ENV_FILE=/etc/uiabot/bot.env
+   ```
+
+   Linux/MacOS орчинд тухайн өдрийн терминалд түр хугацаанд тохируулж хэрэглэх шаардлагатай бол дараах байдлаар экспортлож болно:
 
    ```bash
    export TELEGRAM_BOT_TOKEN="123456:ABC..."
    export OPENAI_API_KEY="sk-..."
    export MANAGER_CHAT_ID="987654321"
    export ENGINEERS='[{"name": "Инженер А", "chat_id": 111111111}, {"name": "Инженер Б", "chat_id": 222222222}]'
+   ```
+
+   `systemd` сервис үүсгэхдээ эдгээр хувьсагчдыг `[Service]` хэсэгт `Environment=` мөрөөр тодорхой зааж өгөөрэй. Жишээ нь:
+
+   ```ini
+   [Service]
+   Environment=TELEGRAM_BOT_TOKEN=123:abc
+   Environment=OPENAI_API_KEY=sk-...
+   Environment=OPENAI_MODEL=gpt-4o-mini
+   Environment=MANAGER_CHAT_ID=987654321
+   Environment=ENGINEERS=[{"name":"Инженер А","chat_id":111111111}]
+   ```
+
+   OpenAI API-т холбогдож буй эсэхийг дараах тушаалаар хурдан шалгаж болно:
+
+   ```bash
+   curl -s https://api.openai.com/v1/models \
+     -H "Authorization: Bearer $OPENAI_API_KEY" | head
    ```
 
 ## Ажиллуулах
