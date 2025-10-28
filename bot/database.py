@@ -109,6 +109,7 @@ class Database:
     def _get_connection(self) -> Iterable[sqlite3.Connection]:
         with self._lock:
             conn = sqlite3.connect(self._path)
+            conn.row_factory = sqlite3.Row
             try:
                 yield conn
             finally:
@@ -178,6 +179,65 @@ class Database:
                 (engineer_name, "escalated_to_engineer", call_id),
             )
             conn.commit()
+
+    def assign_engineer_if_unassigned(self, call_id: int, engineer_name: str) -> bool:
+        """Assign an engineer only when the call is still unassigned."""
+
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE calls
+                   SET assigned_engineer = ?,
+                       status = ?
+                 WHERE id = ?
+                   AND (assigned_engineer IS NULL OR assigned_engineer = '')
+                """,
+                (engineer_name, "escalated_to_engineer", call_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def is_call_assigned(self, call_id: int) -> bool:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT assigned_engineer FROM calls WHERE id = ?",
+                (call_id,),
+            ).fetchone()
+            return bool(row and row[0])
+
+    def get_call_details(self, call_id: int) -> Dict[str, object] | None:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT id,
+                       user_full_name,
+                       department,
+                       issue_type,
+                       employee_code,
+                       issue_description,
+                       ai_guidance,
+                       status,
+                       assigned_engineer
+                  FROM calls
+                 WHERE id = ?
+                """,
+                (call_id,),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return {
+            "id": int(row["id"]),
+            "user_full_name": row["user_full_name"],
+            "department": row["department"],
+            "issue_type": row["issue_type"],
+            "employee_code": row["employee_code"],
+            "issue_description": row["issue_description"],
+            "ai_guidance": row["ai_guidance"],
+            "status": row["status"],
+            "assigned_engineer": row["assigned_engineer"],
+        }
 
     # Reporting ------------------------------------------------------------
     def _count_for_today(self, engineer_name: str) -> int:

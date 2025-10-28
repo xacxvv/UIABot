@@ -10,6 +10,7 @@ from typing import Dict, List
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.ext import (
     Application,
+    CallbackContext,
     CommandHandler,
     ConversationHandler,
     ContextTypes,
@@ -18,7 +19,7 @@ from telegram.ext import (
 )
 
 from .ai import AIAssistant
-from .config import BotConfig
+from .config import BotConfig, Engineer
 from .database import Database
 
 
@@ -318,45 +319,50 @@ class BotHandler:
                 ),
             )
             return
-
         loads = self._database.engineer_loads([engineer.name for engineer in engineers])
-        selected = min(engineers, key=lambda eng: loads.get(eng.name, 0))
-        self._database.assign_engineer(call_id, selected.name)
+        self._database.mark_status(call_id, "awaiting_manager")
 
         category: IssueCategory = context.user_data["issue_category"]
         summary_lines = [
-            "Шинэ дуудлага:\n",
+            "Дуудлагыг инженерт оноох шаардлагатай байна.\n",
             f"- Дуудлагын ID: {call_id}\n",
             f"- Ажилтан: {context.user_data['full_name']}\n",
             f"- Бүтцийн нэгж: {context.user_data['department']}\n",
             f"- Ажилтны код: {context.user_data.get('employee_code', 'бүртгэгдээгүй')}\n",
             f"- Асуудлын төрөл: {category.title}\n",
             f"- Дэлгэрэнгүй: {context.user_data.get('issue_description', 'бүртгэгдээгүй')}\n",
-            f"- Оноосон инженер: {selected.name}\n",
-            f"- Өнөөдрийн ачаалал: {loads.get(selected.name, 0) + 1} дуудлага",
         ]
         ai_guidance = context.user_data.get("ai_guidance")
         if ai_guidance:
-            summary_lines.append("\n- AI зөвлөгөө:\n" + ai_guidance)
-        summary = "".join(summary_lines)
+            summary_lines.append("\n- AI зөвлөгөө:\n" + ai_guidance + "\n")
+
+        summary_lines.append("\nБоломжит инженерүүд:\n")
+        for engineer in engineers:
+            summary_lines.append(
+                f"- {engineer.name}: {loads.get(engineer.name, 0)} дуудлага өнөөдөр\n"
+            )
+
+        summary_lines.append(
+            "\n10 минутын дотор /assign_call ДУУДЛАГЫН_ID ИНЖЕНЕР_НЭР командыг ашиглан инженер онооно уу."
+            " Хэрэв оноохгүй бол систем хамгийн бага ачаалалтай инженерт автоматаар онооно."
+        )
 
         await context.bot.send_message(
             chat_id=self._config.manager_chat_id,
-            text=summary,
+            text="".join(summary_lines),
         )
-        try:
-            await context.bot.send_message(
-                chat_id=selected.chat_id,
-                text=(
-                    f"Танд шинэ дуудлага оноолоо.\n{summary}\n"
-                    "Дэлгэрэнгүйг системээс шалгана уу."
-                ),
+
+        job_queue = context.application.job_queue if context.application else None
+        if job_queue:
+            job_queue.run_once(
+                self._auto_assign_job,
+                when=600,
+                name=self._auto_assign_job_name(call_id),
+                data={"call_id": call_id},
             )
-        except Exception:  # pragma: no cover - engineer chat might be invalid
-            pass
 
         await update.message.reply_text(
-            "Манай инженерүүд таныг удахгүй холбогдоно.",
+            "Манай менежер дуудлагыг шалгаж, инженерт оноож байна. Удахгүй холбогдоно.",
             reply_markup=ReplyKeyboardRemove(),
         )
 
@@ -381,6 +387,82 @@ class BotHandler:
             chat_id=self._config.manager_chat_id,
             text="".join(message_lines),
         )
+
+    def _auto_assign_job_name(self, call_id: int) -> str:
+        return f"auto_assign_{call_id}"
+
+    def _find_engineer(self, name: str) -> Engineer | None:
+        lookup = name.strip().lower()
+        for engineer in self._config.engineers:
+            if engineer.name.lower() == lookup:
+                return engineer
+        return None
+
+    def _compose_assignment_summary(
+        self,
+        details: Dict[str, object],
+        engineer: Engineer,
+        loads: Dict[str, int],
+    ) -> str:
+        summary_lines = [
+            "Шинэ дуудлага:\n",
+            f"- Дуудлагын ID: {details['id']}\n",
+            f"- Ажилтан: {details['user_full_name']}\n",
+            f"- Бүтцийн нэгж: {details['department']}\n",
+            f"- Ажилтны код: {details.get('employee_code') or 'бүртгэгдээгүй'}\n",
+            f"- Асуудлын төрөл: {details['issue_type']}\n",
+            f"- Дэлгэрэнгүй: {details.get('issue_description') or 'бүртгэгдээгүй'}\n",
+            f"- Оноосон инженер: {engineer.name}\n",
+            f"- Өнөөдрийн ачаалал: {loads.get(engineer.name, 0) + 1} дуудлага",
+        ]
+        ai_guidance = details.get("ai_guidance")
+        if ai_guidance:
+            summary_lines.append("\n- AI зөвлөгөө:\n" + str(ai_guidance))
+        return "".join(summary_lines)
+
+    async def _notify_engineer(
+        self, context: CallbackContext, engineer: Engineer, summary: str
+    ) -> None:
+        try:
+            await context.bot.send_message(
+                chat_id=engineer.chat_id,
+                text=(
+                    f"Танд шинэ дуудлага оноолоо.\n{summary}\n"
+                    "Дэлгэрэнгүйг системээс шалгана уу."
+                ),
+            )
+        except Exception:  # pragma: no cover - engineer chat might be invalid
+            pass
+
+    async def _auto_assign_job(self, context: CallbackContext) -> None:
+        job = context.job
+        call_id = job.data.get("call_id") if job and job.data else None
+        if call_id is None:
+            return
+
+        engineers = self._config.engineers
+        if not engineers:
+            return
+
+        if self._database.is_call_assigned(call_id):
+            return
+
+        loads = self._database.engineer_loads([engineer.name for engineer in engineers])
+        selected = min(engineers, key=lambda eng: loads.get(eng.name, 0))
+        assigned = self._database.assign_engineer_if_unassigned(call_id, selected.name)
+        if not assigned:
+            return
+
+        details = self._database.get_call_details(call_id)
+        if not details:
+            return
+
+        summary = self._compose_assignment_summary(details, selected, loads)
+        await context.bot.send_message(
+            chat_id=self._config.manager_chat_id,
+            text="10 минут өнгөрсөн тул дуудлагыг автоматаар оноолоо.\n\n" + summary,
+        )
+        await self._notify_engineer(context, selected, summary)
 
     # Reporting ----------------------------------------------------------
     async def report(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -442,6 +524,65 @@ class BotHandler:
                 f"{code} кодын мэдээллийг {full_name} нэрээр шинэчиллээ."
             )
 
+    async def assign_call(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user_id = update.effective_user.id
+        if user_id != self._config.manager_chat_id:
+            await update.message.reply_text("Энэ коммандыг ашиглах эрхгүй байна.")
+            return
+
+        if not context.args or len(context.args) < 2:
+            await update.message.reply_text(
+                "Хэрэглээ: /assign_call ДУУДЛАГЫН_ID ИНЖЕНЕР_НЭР"
+            )
+            return
+
+        try:
+            call_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("Дуудлагын ID бүхэл тоо байх ёстой.")
+            return
+
+        engineer_name = " ".join(context.args[1:]).strip()
+        if not engineer_name:
+            await update.message.reply_text("Инженерийн нэрийг зөв оруулна уу.")
+            return
+
+        engineer = self._find_engineer(engineer_name)
+        if not engineer:
+            available = ", ".join(eng.name for eng in self._config.engineers) or "тодорхойгүй"
+            await update.message.reply_text(
+                f"{engineer_name} нэртэй инженер тохируулагдаагүй байна. Боломжит нэрс: {available}"
+            )
+            return
+
+        details = self._database.get_call_details(call_id)
+        if not details:
+            await update.message.reply_text(
+                f"{call_id} дуудлага олдсонгүй."
+            )
+            return
+
+        if details["status"] in {"resolved_with_basic", "resolved_with_ai"}:
+            await update.message.reply_text(
+                "Энэ дуудлага аль хэдийн хаагдсан байна."
+            )
+            return
+
+        job_queue = context.application.job_queue if context.application else None
+        if job_queue:
+            for job in job_queue.get_jobs_by_name(self._auto_assign_job_name(call_id)):
+                job.schedule_removal()
+
+        loads = self._database.engineer_loads([eng.name for eng in self._config.engineers])
+        self._database.assign_engineer(call_id, engineer.name)
+
+        summary = self._compose_assignment_summary(details, engineer, loads)
+        await update.message.reply_text(
+            f"{call_id} дуудлагыг {engineer.name} инженерт оноолоо.\n\n" + summary
+        )
+
+        await self._notify_engineer(context, engineer, summary)
+
     async def cancel(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> ConversationState | int:
@@ -490,6 +631,8 @@ def build_application(config: BotConfig, database: Database, ai: AIAssistant) ->
     application.add_handler(conversation)
     application.add_handler(CommandHandler("report", handler.report))
     application.add_handler(CommandHandler("add_employee", handler.add_employee))
+    application.add_handler(CommandHandler("assign_call", handler.assign_call))
 
     return application
+
 
