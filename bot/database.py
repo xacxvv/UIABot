@@ -47,6 +47,14 @@ class Database:
                 END;
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS employee_codes (
+                    code TEXT PRIMARY KEY,
+                    full_name TEXT NOT NULL
+                )
+                """
+            )
             conn.commit()
 
             columns = {
@@ -58,6 +66,44 @@ class Database:
                     "ALTER TABLE calls ADD COLUMN employee_code TEXT"
                 )
                 conn.commit()
+
+    def has_employee_codes(self) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT 1 FROM employee_codes LIMIT 1"
+            )
+            return cursor.fetchone() is not None
+
+    def is_employee_code_allowed(self, code: str) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT 1 FROM employee_codes WHERE code = ?",
+                (code,),
+            )
+            return cursor.fetchone() is not None
+
+    def add_employee(self, code: str, full_name: str) -> bool:
+        """Add or update an employee record.
+
+        Returns ``True`` when a new record was created and ``False`` when an
+        existing record was updated.
+        """
+
+        with self._get_connection() as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM employee_codes WHERE code = ?",
+                (code,),
+            ).fetchone()
+            conn.execute(
+                """
+                INSERT INTO employee_codes (code, full_name)
+                VALUES (?, ?)
+                ON CONFLICT(code) DO UPDATE SET full_name = excluded.full_name
+                """,
+                (code, full_name),
+            )
+            conn.commit()
+            return existing is None
 
     @contextmanager
     def _get_connection(self) -> Iterable[sqlite3.Connection]:

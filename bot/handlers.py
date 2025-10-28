@@ -118,7 +118,7 @@ class BotHandler:
     # Conversation flow --------------------------------------------------
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> ConversationState:
         context.user_data.clear()
-        if self._config.employee_codes:
+        if self._config.employee_codes or self._database.has_employee_codes():
             await update.message.reply_text(
                 "Сайн байна уу. Та өөрийн ажилтны кодоо оруулна уу.",
                 reply_markup=ReplyKeyboardRemove(),
@@ -139,7 +139,7 @@ class BotHandler:
         attempts = int(context.user_data.get("employee_code_attempts", 0)) + 1
         context.user_data["employee_code_attempts"] = attempts
 
-        if code in self._config.employee_codes:
+        if code in self._config.employee_codes or self._database.is_employee_code_allowed(code):
             context.user_data["employee_code"] = code
             context.user_data.pop("employee_code_attempts", None)
             await update.message.reply_text("Таны овог, нэрээ оруулна уу.")
@@ -409,6 +409,39 @@ class BotHandler:
 
         await update.message.reply_text("\n".join(lines))
 
+    async def add_employee(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        user_id = update.effective_user.id
+        if user_id != self._config.manager_chat_id:
+            await update.message.reply_text("Энэ коммандыг ашиглах эрхгүй байна.")
+            return
+
+        if not context.args or len(context.args) < 2:
+            await update.message.reply_text(
+                "Хэрэглээ: /add_employee АЖИЛТНЫ_КОД ОВОГ НЭР"
+            )
+            return
+
+        code = context.args[0].strip()
+        full_name = " ".join(context.args[1:]).strip()
+
+        if not code or not full_name:
+            await update.message.reply_text(
+                "Код болон овог нэрийг зөв оруулна уу."
+            )
+            return
+
+        created = self._database.add_employee(code, full_name)
+        if created:
+            await update.message.reply_text(
+                f"{code} код бүхий {full_name} амжилттай нэмэгдлээ."
+            )
+        else:
+            await update.message.reply_text(
+                f"{code} кодын мэдээллийг {full_name} нэрээр шинэчиллээ."
+            )
+
     async def cancel(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> ConversationState | int:
@@ -456,6 +489,7 @@ def build_application(config: BotConfig, database: Database, ai: AIAssistant) ->
     application = Application.builder().token(config.telegram_token).build()
     application.add_handler(conversation)
     application.add_handler(CommandHandler("report", handler.report))
+    application.add_handler(CommandHandler("add_employee", handler.add_employee))
 
     return application
 
