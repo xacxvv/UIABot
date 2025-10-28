@@ -22,7 +22,8 @@
    pip install -r requirements.txt
    ```
 
-2. Дараах орчны хувьсагчдыг тохируулна:
+2. Төслийн үндсэн хавтас дотор `.env` файл үүсгээд дараах орчны хувьсагчдыг нэг удаа тохируулна. Бот ажиллах болгонд энэ файл
+   автоматаар уншигдана:
 
    | Хувьсагч | Тайлбар |
    | --- | --- |
@@ -36,11 +37,11 @@
    Linux/MacOS дээр жишээ тохиргоо:
 
    ```bash
-   export TELEGRAM_BOT_TOKEN="123456:ABC..."
-   export OPENAI_API_KEY="sk-..."
-   export MANAGER_CHAT_ID="987654321"
-   export ENGINEERS='[{"name": "Инженер А", "chat_id": 111111111}, {"name": "Инженер Б", "chat_id": 222222222}]'
-   export EMPLOYEE_CODES='["IT-001", "IT-002"]'
+   TELEGRAM_BOT_TOKEN="123456:ABC..."
+   OPENAI_API_KEY="sk-..."
+   MANAGER_CHAT_ID="987654321"
+   ENGINEERS='[{"name": "Инженер А", "chat_id": 111111111}, {"name": "Инженер Б", "chat_id": 222222222}]'
+   EMPLOYEE_CODES='["IT-001", "IT-002"]'
    ```
 
    `.env` файлуудад `KEY=VALUE` болон `export KEY=VALUE` аль алиныг нь ашиглаж болно — эхний утга давхар бичигдэхгүй.
