@@ -27,6 +27,7 @@ class Database:
                     user_full_name TEXT NOT NULL,
                     department TEXT NOT NULL,
                     issue_type TEXT NOT NULL,
+                    employee_code TEXT,
                     basic_guidance TEXT,
                     issue_description TEXT,
                     ai_guidance TEXT,
@@ -46,12 +47,69 @@ class Database:
                 END;
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS employee_codes (
+                    code TEXT PRIMARY KEY,
+                    full_name TEXT NOT NULL
+                )
+                """
+            )
             conn.commit()
+
+            columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(calls)").fetchall()
+            }
+            if "employee_code" not in columns:
+                conn.execute(
+                    "ALTER TABLE calls ADD COLUMN employee_code TEXT"
+                )
+                conn.commit()
+
+    def has_employee_codes(self) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT 1 FROM employee_codes LIMIT 1"
+            )
+            return cursor.fetchone() is not None
+
+    def is_employee_code_allowed(self, code: str) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT 1 FROM employee_codes WHERE code = ?",
+                (code,),
+            )
+            return cursor.fetchone() is not None
+
+    def add_employee(self, code: str, full_name: str) -> bool:
+        """Add or update an employee record.
+
+        Returns ``True`` when a new record was created and ``False`` when an
+        existing record was updated.
+        """
+
+        with self._get_connection() as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM employee_codes WHERE code = ?",
+                (code,),
+            ).fetchone()
+            conn.execute(
+                """
+                INSERT INTO employee_codes (code, full_name)
+                VALUES (?, ?)
+                ON CONFLICT(code) DO UPDATE SET full_name = excluded.full_name
+                """,
+                (code, full_name),
+            )
+            conn.commit()
+            return existing is None
 
     @contextmanager
     def _get_connection(self) -> Iterable[sqlite3.Connection]:
         with self._lock:
             conn = sqlite3.connect(self._path)
+            conn.row_factory = sqlite3.Row
             try:
                 yield conn
             finally:
@@ -64,6 +122,7 @@ class Database:
         full_name: str,
         department: str,
         issue_type: str,
+        employee_code: str | None,
         basic_guidance: str,
     ) -> int:
         with self._get_connection() as conn:
@@ -74,15 +133,17 @@ class Database:
                     user_full_name,
                     department,
                     issue_type,
+                    employee_code,
                     basic_guidance,
                     status
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     telegram_user_id,
                     full_name,
                     department,
                     issue_type,
+                    employee_code,
                     basic_guidance,
                     "basic_guidance_provided",
                 ),
@@ -118,6 +179,65 @@ class Database:
                 (engineer_name, "escalated_to_engineer", call_id),
             )
             conn.commit()
+
+    def assign_engineer_if_unassigned(self, call_id: int, engineer_name: str) -> bool:
+        """Assign an engineer only when the call is still unassigned."""
+
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE calls
+                   SET assigned_engineer = ?,
+                       status = ?
+                 WHERE id = ?
+                   AND (assigned_engineer IS NULL OR assigned_engineer = '')
+                """,
+                (engineer_name, "escalated_to_engineer", call_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def is_call_assigned(self, call_id: int) -> bool:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT assigned_engineer FROM calls WHERE id = ?",
+                (call_id,),
+            ).fetchone()
+            return bool(row and row[0])
+
+    def get_call_details(self, call_id: int) -> Dict[str, object] | None:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT id,
+                       user_full_name,
+                       department,
+                       issue_type,
+                       employee_code,
+                       issue_description,
+                       ai_guidance,
+                       status,
+                       assigned_engineer
+                  FROM calls
+                 WHERE id = ?
+                """,
+                (call_id,),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return {
+            "id": int(row["id"]),
+            "user_full_name": row["user_full_name"],
+            "department": row["department"],
+            "issue_type": row["issue_type"],
+            "employee_code": row["employee_code"],
+            "issue_description": row["issue_description"],
+            "ai_guidance": row["ai_guidance"],
+            "status": row["status"],
+            "assigned_engineer": row["assigned_engineer"],
+        }
 
     # Reporting ------------------------------------------------------------
     def _count_for_today(self, engineer_name: str) -> int:

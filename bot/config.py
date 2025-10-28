@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import List
+from typing import List, Set
 
 
 @dataclass(frozen=True)
@@ -24,6 +24,7 @@ class BotConfig:
     openai_api_key: str
     manager_chat_id: int
     engineers: List[Engineer]
+    employee_codes: Set[str]
     database_path: str = "data/bot.db"
 
 
@@ -48,6 +49,73 @@ def _load_engineers(raw: str | None) -> List[Engineer]:
     return engineers
 
 
+def _load_employee_codes(raw: str | None) -> Set[str]:
+    if not raw:
+        return set()
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:  # pragma: no cover - defensive
+        raise ValueError(
+            "EMPLOYEE_CODES environment variable must contain valid JSON"
+        ) from exc
+
+    if isinstance(payload, list):
+        codes = {str(item).strip() for item in payload if str(item).strip()}
+        return codes
+
+    if isinstance(payload, dict):
+        codes = {str(key).strip() for key, value in payload.items() if str(key).strip()}
+        return codes
+
+    raise ValueError(
+        "EMPLOYEE_CODES environment variable must be a JSON array or object"
+    )
+
+
+def load_env_file(path: str) -> None:
+    """Load environment variables from a ``.env`` style file.
+
+    The parser is intentionally minimal: blank lines and comments are ignored,
+    keys and values are stripped from surrounding whitespace, quoted values are
+    unwrapped, and values for keys that already exist in ``os.environ`` are not
+    overwritten ("first wins").
+
+    In addition to the classic ``KEY=VALUE`` form, lines starting with
+    ``export`` are also accepted which allows compatibility with shells where
+    environment files use ``export KEY=VALUE`` assignments.
+    """
+
+    if not os.path.exists(path):
+        return
+
+    with open(path, "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+
+            if line.startswith("export"):
+                remainder = line[6:]
+                if remainder and remainder[0].isspace():
+                    line = remainder.lstrip()
+
+            if "=" not in line:
+                continue
+
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+
+            if not key or key in os.environ:
+                continue
+
+            if value and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+
+            os.environ[key] = value
+
+
 def load_config() -> BotConfig:
     """Load configuration from environment variables."""
 
@@ -65,6 +133,7 @@ def load_config() -> BotConfig:
     manager_chat_id = int(manager_raw)
 
     engineers = _load_engineers(os.environ.get("ENGINEERS"))
+    employee_codes = _load_employee_codes(os.environ.get("EMPLOYEE_CODES"))
 
     db_path = os.environ.get("DATABASE_PATH", "data/bot.db")
     db_dir = os.path.dirname(db_path)
@@ -76,6 +145,7 @@ def load_config() -> BotConfig:
         openai_api_key=openai_api_key,
         manager_chat_id=manager_chat_id,
         engineers=engineers,
+        employee_codes=employee_codes,
         database_path=db_path,
     )
 
