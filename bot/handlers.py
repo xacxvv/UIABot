@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, time
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Dict, List
@@ -116,9 +117,21 @@ class BotHandler:
         self._database = database
         self._ai = ai
 
+    def _within_working_hours(self) -> bool:
+        now = datetime.now().time()
+        start = time(8, 0)
+        end = time(19, 0)
+        return start <= now < end
+
     # Conversation flow --------------------------------------------------
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> ConversationState:
         context.user_data.clear()
+        if not self._within_working_hours():
+            await update.message.reply_text(
+                "Уучлаарай, ажлын цаг дууссан байна. Бид 08:00-19:00 цагийн хооронд дуудлага хүлээн авна.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            return ConversationHandler.END
         if self._config.employee_codes or self._database.has_employee_codes():
             await update.message.reply_text(
                 "Сайн байна уу. Та өөрийн ажилтны кодоо оруулна уу.",
