@@ -22,6 +22,7 @@ class BotConfig:
 
     telegram_token: str
     openai_api_key: str
+    openai_model: str
     manager_chat_id: int
     engineers: List[Engineer]
     employee_codes: Set[str]
@@ -132,6 +133,7 @@ def load_config() -> BotConfig:
         raise ValueError("MANAGER_CHAT_ID environment variable is required")
     manager_chat_id = int(manager_raw)
 
+    openai_model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
     engineers = _load_engineers(os.environ.get("ENGINEERS"))
     employee_codes = _load_employee_codes(os.environ.get("EMPLOYEE_CODES"))
 
@@ -143,6 +145,7 @@ def load_config() -> BotConfig:
     return BotConfig(
         telegram_token=telegram_token,
         openai_api_key=openai_api_key,
+        openai_model=openai_model,
         manager_chat_id=manager_chat_id,
         engineers=engineers,
         employee_codes=employee_codes,

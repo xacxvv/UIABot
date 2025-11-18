@@ -94,8 +94,6 @@ ISSUE_BY_TITLE: Dict[str, IssueCategory] = {item.title: item for item in ISSUE_C
 
 class ConversationState(Enum):
     ASK_EMPLOYEE_CODE = auto()
-    ASK_NAME = auto()
-    ASK_DEPARTMENT = auto()
     CHOOSE_ISSUE = auto()
     BASIC_FOLLOWUP = auto()
     REQUEST_DETAILS = auto()
@@ -140,20 +138,12 @@ class BotHandler:
     # Conversation flow --------------------------------------------------
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> ConversationState:
         context.user_data.clear()
-        user_id = update.effective_user.id if update.effective_user else None
-        if self._config.employee_codes or self._database.has_employee_codes():
-            await update.message.reply_text(
-                "Сайн байна уу. Та өөрийн ажилтны кодоо оруулна уу.",
-                reply_markup=ReplyKeyboardRemove(),
-            )
-            context.user_data["employee_code_attempts"] = 0
-            return ConversationState.ASK_EMPLOYEE_CODE
-
         await update.message.reply_text(
-            "Сайн байна уу. Та өөрийн овог, нэрээ оруулна уу.",
+            "Сайн байна уу. Та өөрийн ажилтны кодоо оруулна уу.",
             reply_markup=ReplyKeyboardRemove(),
         )
-        return ConversationState.ASK_NAME
+        context.user_data["employee_code_attempts"] = 0
+        return ConversationState.ASK_EMPLOYEE_CODE
 
     async def receive_employee_code(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -162,37 +152,21 @@ class BotHandler:
         attempts = int(context.user_data.get("employee_code_attempts", 0)) + 1
         context.user_data["employee_code_attempts"] = attempts
 
-        if code in self._config.employee_codes or self._database.is_employee_code_allowed(code):
+        employee = self._database.get_employee(code)
+        if employee and employee.get("full_name") and employee.get("department"):
             context.user_data["employee_code"] = code
+            context.user_data["full_name"] = employee["full_name"]
+            context.user_data["department"] = employee["department"]
             context.user_data.pop("employee_code_attempts", None)
-            employee = self._database.get_employee(code)
-            if employee and employee.get("full_name"):
-                context.user_data["full_name"] = employee["full_name"]
-                if employee.get("department"):
-                    context.user_data["department"] = employee["department"]
-                    await update.message.reply_text(
-                        (
-                            f"Сайн байна уу, {employee['full_name']}!\n"
-                            "Бүртгэлтэй мэдээлэлтэй тохирлоо.\n"
-                            f"- Овог, нэр: {employee['full_name']}\n"
-                            f"- Бүтцийн нэгж: {employee['department']}\n"
-                            "Асуудлын төрлөө сонгоно уу."
-                        ),
-                        reply_markup=ISSUE_KEYBOARD,
-                    )
-                    return ConversationState.CHOOSE_ISSUE
-
-                await update.message.reply_text(
-                    (
-                        f"Сайн байна уу, {employee['full_name']}!\n"
-                        "Бүртгэлтэй мэдээлэл олдлоо.\n"
-                        "Бүтцийн нэгжийг оруулна уу."
-                    )
-                )
-                return ConversationState.ASK_DEPARTMENT
-
-            await update.message.reply_text("Таны овог, нэрээ оруулна уу.")
-            return ConversationState.ASK_NAME
+            await update.message.reply_text(
+                (
+                    f"Сайн байна уу, {employee['full_name']}!\n"
+                    "Таны кодыг баталгаажууллаа.\n"
+                    "Асуудлын төрлөө сонгоно уу."
+                ),
+                reply_markup=ISSUE_KEYBOARD,
+            )
+            return ConversationState.CHOOSE_ISSUE
 
         if attempts >= 3:
             await update.message.reply_text(
@@ -202,30 +176,10 @@ class BotHandler:
             return ConversationHandler.END
 
         await update.message.reply_text(
-            "Ажилтны код буруу байна. Дахин оруулна уу.",
+            "Ажилтны код буруу байна. Менежертэй холбогдож кодоо шалгаад дахин оруулна уу.",
             reply_markup=ReplyKeyboardRemove(),
         )
         return ConversationState.ASK_EMPLOYEE_CODE
-
-    async def receive_name(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> ConversationState:
-        full_name = update.message.text.strip()
-        context.user_data["full_name"] = full_name
-        await update.message.reply_text(
-            "Таны ажиллаж буй бүтцийн нэгжийг бичнэ үү (жишээ нь: Мэдээлэл технологийн тѳв)."
-        )
-        return ConversationState.ASK_DEPARTMENT
-
-    async def receive_department(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> ConversationState:
-        department = update.message.text.strip()
-        context.user_data["department"] = department
-        await update.message.reply_text(
-            "Тулгарсан асуудлын төрлөө сонгоно уу.", reply_markup=ISSUE_KEYBOARD
-        )
-        return ConversationState.CHOOSE_ISSUE
 
     async def choose_issue(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -237,6 +191,13 @@ class BotHandler:
                 "Жагсаалтаас сонголтоо хийнэ үү.", reply_markup=ISSUE_KEYBOARD
             )
             return ConversationState.CHOOSE_ISSUE
+
+        if "full_name" not in context.user_data or "department" not in context.user_data:
+            await update.message.reply_text(
+                "Ажилтны мэдээлэл олдсонгүй. /start командыг ашиглан дахин эхлүүлнэ үү.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            return ConversationHandler.END
 
         context.user_data["issue_category"] = category
         user = update.effective_user
@@ -756,12 +717,6 @@ def build_application(config: BotConfig, database: Database, ai: AIAssistant) ->
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND, handler.receive_employee_code
                 )
-            ],
-            ConversationState.ASK_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handler.receive_name)
-            ],
-            ConversationState.ASK_DEPARTMENT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handler.receive_department)
             ],
             ConversationState.CHOOSE_ISSUE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handler.choose_issue)
