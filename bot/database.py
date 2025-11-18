@@ -309,3 +309,49 @@ class Database:
             "statuses": [(row[0], int(row[1])) for row in statuses],
         }
 
+    def summary_between(self, start_date: datetime, end_date: datetime) -> Dict[str, object]:
+        """Return summary statistics between inclusive date boundaries."""
+
+        start = start_date.date().isoformat()
+        end = end_date.date().isoformat()
+
+        with self._get_connection() as conn:
+            total_calls = conn.execute(
+                "SELECT COUNT(*) FROM calls WHERE DATE(created_at) BETWEEN ? AND ?",
+                (start, end),
+            ).fetchone()[0]
+            by_department = conn.execute(
+                """
+                SELECT department, COUNT(*)
+                  FROM calls
+                 WHERE DATE(created_at) BETWEEN ? AND ?
+                 GROUP BY department
+                """,
+                (start, end),
+            ).fetchall()
+            by_issue = conn.execute(
+                """
+                SELECT issue_type, COUNT(*)
+                  FROM calls
+                 WHERE DATE(created_at) BETWEEN ? AND ?
+                 GROUP BY issue_type
+                """,
+                (start, end),
+            ).fetchall()
+            statuses = conn.execute(
+                """
+                SELECT status, COUNT(*)
+                  FROM calls
+                 WHERE DATE(created_at) BETWEEN ? AND ?
+                 GROUP BY status
+                """,
+                (start, end),
+            ).fetchall()
+
+        return {
+            "total": int(total_calls),
+            "by_department": [(row[0], int(row[1])) for row in by_department],
+            "by_issue": [(row[0], int(row[1])) for row in by_issue],
+            "statuses": [(row[0], int(row[1])) for row in statuses],
+        }
+

@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Dict, List
 
-from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    Update,
+)
 from telegram.ext import (
     Application,
     CallbackContext,
+    CallbackQueryHandler,
     CommandHandler,
     ConversationHandler,
     ContextTypes,
@@ -116,11 +123,24 @@ class BotHandler:
         self._config = config
         self._database = database
         self._ai = ai
+        self._report_keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("Өнөөдөр", callback_data="report:today"),
+                    InlineKeyboardButton("Сүүлийн 7 хоног", callback_data="report:7d"),
+                ],
+                [
+                    InlineKeyboardButton("Энэ сар", callback_data="report:month"),
+                    InlineKeyboardButton("Өнгөрсөн сар", callback_data="report:prev_month"),
+                ],
+                [InlineKeyboardButton("Хугацаа сонгох", callback_data="report:custom")],
+            ]
+        )
 
     def _within_working_hours(self) -> bool:
         now = datetime.now().time()
-        start = time(8, 0)
-        end = time(19, 0)
+        start = time(9, 0)
+        end = time(18, 0)
         return start <= now < end
 
     # Conversation flow --------------------------------------------------
@@ -128,7 +148,7 @@ class BotHandler:
         context.user_data.clear()
         if not self._within_working_hours():
             await update.message.reply_text(
-                "Уучлаарай, ажлын цаг дууссан байна. Бид 08:00-19:00 цагийн хооронд дуудлага хүлээн авна.",
+                "Уучлаарай, ажлын цаг дууссан байна. Бид 09:00-18:00 цагийн хооронд дуудлага хүлээн авна.",
                 reply_markup=ReplyKeyboardRemove(),
             )
             return ConversationHandler.END
@@ -508,8 +528,92 @@ class BotHandler:
             await update.message.reply_text("Энэ коммандыг ашиглах эрхгүй байна.")
             return
 
-        summary = self._database.summary()
-        lines = [f"Нийт хүлээн авсан дуудлага: {summary['total']}"]
+        await update.message.reply_text(
+            "Тайлан авах хугацаагаа сонгоно уу.", reply_markup=self._report_keyboard
+        )
+
+    async def handle_report_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        query = update.callback_query
+        await query.answer()
+
+        if query.from_user.id != self._config.manager_chat_id:
+            await query.edit_message_text("Энэ үйлдлийг зөвхөн менежер ашиглана.")
+            return
+
+        option = query.data.split(":", maxsplit=1)[-1]
+        now = datetime.now()
+
+        if option == "today":
+            start = end = now
+        elif option == "7d":
+            start = now - timedelta(days=6)
+            end = now
+        elif option == "month":
+            start = now.replace(day=1)
+            end = now
+        elif option == "prev_month":
+            first_this_month = now.replace(day=1)
+            end = first_this_month - timedelta(days=1)
+            start = end.replace(day=1)
+        elif option == "custom":
+            context.user_data["awaiting_report_range"] = True
+            await query.edit_message_text(
+                (
+                    "Хугацаагаа YYYY-MM-DD - YYYY-MM-DD форматтайгаар оруулна уу.\n"
+                    "Жишээ: 2024-05-01 - 2024-05-31"
+                ),
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            return
+        else:
+            await query.edit_message_text("Тодорхойгүй сонголт байна.")
+            return
+
+        await self._send_summary(query.message.chat_id, context, start, end)
+
+    async def receive_report_range(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        if not context.user_data.get("awaiting_report_range"):
+            return
+
+        if update.effective_user.id != self._config.manager_chat_id:
+            return
+
+        text = update.message.text
+        try:
+            start, end = self._parse_date_range(text)
+        except ValueError:
+            await update.message.reply_text(
+                "Огнооны форматыг YYYY-MM-DD - YYYY-MM-DD байдлаар оруулна уу.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            return
+
+        context.user_data.pop("awaiting_report_range", None)
+        await self._send_summary(update.effective_chat.id, context, start, end)
+
+    def _parse_date_range(self, text: str) -> tuple[datetime, datetime]:
+        cleaned = text.replace("–", "-")
+        parts = [segment.strip() for segment in cleaned.split(" - ")]
+        if len(parts) != 2:
+            raise ValueError("invalid format")
+
+        start = datetime.strptime(parts[0], "%Y-%m-%d")
+        end = datetime.strptime(parts[1], "%Y-%m-%d")
+        if start > end:
+            raise ValueError("start after end")
+        return start, end
+
+    def _format_summary(
+        self, summary: Dict[str, object], start: datetime, end: datetime
+    ) -> str:
+        lines = [
+            f"Тайлангийн хугацаа: {start.date()} - {end.date()}",
+            f"Нийт хүлээн авсан дуудлага: {summary['total']}",
+        ]
 
         if summary["by_department"]:
             lines.append("\nБүтцийн нэгжээр:")
@@ -522,11 +626,25 @@ class BotHandler:
                 lines.append(f"- {issue}: {count}")
 
         if summary["statuses"]:
-            lines.append("\nТөлөв:")
+            lines.append("\nСтатус:")
             for status, count in summary["statuses"]:
                 lines.append(f"- {status}: {count}")
 
-        await update.message.reply_text("\n".join(lines))
+        return "\n".join(lines)
+
+    async def _send_summary(
+        self,
+        chat_id: int,
+        context: ContextTypes.DEFAULT_TYPE,
+        start: datetime,
+        end: datetime,
+    ) -> None:
+        summary = self._database.summary_between(start, end)
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=self._format_summary(summary, start, end),
+            reply_markup=self._report_keyboard,
+        )
 
     async def add_employee(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -672,6 +790,13 @@ def build_application(config: BotConfig, database: Database, ai: AIAssistant) ->
     )
 
     application = Application.builder().token(config.telegram_token).build()
+    application.add_handler(CallbackQueryHandler(handler.handle_report_callback, pattern=r"^report:"))
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & filters.User(config.manager_chat_id),
+            handler.receive_report_range,
+        )
+    )
     application.add_handler(conversation)
     application.add_handler(CommandHandler("report", handler.report))
     application.add_handler(CommandHandler("add_employee", handler.add_employee))
