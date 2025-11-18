@@ -146,7 +146,8 @@ class BotHandler:
     # Conversation flow --------------------------------------------------
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> ConversationState:
         context.user_data.clear()
-        if not self._within_working_hours():
+        user_id = update.effective_user.id if update.effective_user else None
+        if user_id != self._config.manager_chat_id and not self._within_working_hours():
             await update.message.reply_text(
                 "Уучлаарай, ажлын цаг дууссан байна. Бид 09:00-18:00 цагийн хооронд дуудлага хүлээн авна.",
                 reply_markup=ReplyKeyboardRemove(),
