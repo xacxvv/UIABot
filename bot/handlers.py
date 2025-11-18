@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, time, timedelta, timezone
-from zoneinfo import ZoneInfo
+from datetime import datetime, time, timedelta
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Dict, List
@@ -124,7 +123,6 @@ class BotHandler:
         self._config = config
         self._database = database
         self._ai = ai
-        self._timezone = ZoneInfo("Asia/Ulaanbaatar")
         self._report_keyboard = InlineKeyboardMarkup(
             [
                 [
@@ -139,12 +137,11 @@ class BotHandler:
             ]
         )
 
-    def _within_working_hours(self, now: datetime | None = None) -> bool:
-        reference = now or datetime.utcnow().replace(tzinfo=timezone.utc)
-        local_time = reference.astimezone(self._timezone).time()
+    def _within_working_hours(self) -> bool:
+        now = datetime.now().time()
         start = time(9, 0)
         end = time(18, 0)
-        return start <= local_time < end
+        return start <= now < end
 
     # Conversation flow --------------------------------------------------
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> ConversationState:
@@ -187,7 +184,6 @@ class BotHandler:
                     context.user_data["department"] = employee["department"]
                     await update.message.reply_text(
                         (
-                            f"Сайн байна уу, {employee['full_name']}!\n"
                             "Бүртгэлтэй мэдээлэлтэй тохирлоо.\n"
                             f"- Овог, нэр: {employee['full_name']}\n"
                             f"- Бүтцийн нэгж: {employee['department']}\n"
@@ -199,8 +195,7 @@ class BotHandler:
 
                 await update.message.reply_text(
                     (
-                        f"Сайн байна уу, {employee['full_name']}!\n"
-                        "Бүртгэлтэй мэдээлэл олдлоо.\n"
+                        f"{employee['full_name']} нэртэй ажилтан байна.\n"
                         "Бүтцийн нэгжийг оруулна уу."
                     )
                 )
