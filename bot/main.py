@@ -26,7 +26,7 @@ def main() -> None:
 
     config = load_config()
     database = Database(config.database_path)
-    assistant = AIAssistant(config.openai_api_key)
+    assistant = AIAssistant(config.openai_api_key, model=config.openai_model)
     application = build_application(config, database, assistant)
     application.run_polling()
 

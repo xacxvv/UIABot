@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, time
+from datetime import datetime, timedelta
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Dict, List
 
-from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    Update,
+)
 from telegram.ext import (
     Application,
     CallbackContext,
+    CallbackQueryHandler,
     CommandHandler,
     ConversationHandler,
     ContextTypes,
@@ -87,8 +94,6 @@ ISSUE_BY_TITLE: Dict[str, IssueCategory] = {item.title: item for item in ISSUE_C
 
 class ConversationState(Enum):
     ASK_EMPLOYEE_CODE = auto()
-    ASK_NAME = auto()
-    ASK_DEPARTMENT = auto()
     CHOOSE_ISSUE = auto()
     BASIC_FOLLOWUP = auto()
     REQUEST_DETAILS = auto()
@@ -116,35 +121,29 @@ class BotHandler:
         self._config = config
         self._database = database
         self._ai = ai
-
-    def _within_working_hours(self) -> bool:
-        now = datetime.now().time()
-        start = time(8, 0)
-        end = time(19, 0)
-        return start <= now < end
+        self._report_keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("Өнөөдөр", callback_data="report:today"),
+                    InlineKeyboardButton("Сүүлийн 7 хоног", callback_data="report:7d"),
+                ],
+                [
+                    InlineKeyboardButton("Энэ сар", callback_data="report:month"),
+                    InlineKeyboardButton("Өнгөрсөн сар", callback_data="report:prev_month"),
+                ],
+                [InlineKeyboardButton("Хугацаа сонгох", callback_data="report:custom")],
+            ]
+        )
 
     # Conversation flow --------------------------------------------------
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> ConversationState:
         context.user_data.clear()
-        if not self._within_working_hours():
-            await update.message.reply_text(
-                "Уучлаарай, ажлын цаг дууссан байна. Бид 08:00-19:00 цагийн хооронд дуудлага хүлээн авна.",
-                reply_markup=ReplyKeyboardRemove(),
-            )
-            return ConversationHandler.END
-        if self._config.employee_codes or self._database.has_employee_codes():
-            await update.message.reply_text(
-                "Сайн байна уу. Та өөрийн ажилтны кодоо оруулна уу.",
-                reply_markup=ReplyKeyboardRemove(),
-            )
-            context.user_data["employee_code_attempts"] = 0
-            return ConversationState.ASK_EMPLOYEE_CODE
-
         await update.message.reply_text(
-            "Сайн байна уу. Та өөрийн овог, нэрээ оруулна уу.",
+            "Сайн байна уу. Та өөрийн ажилтны кодоо оруулна уу.",
             reply_markup=ReplyKeyboardRemove(),
         )
-        return ConversationState.ASK_NAME
+        context.user_data["employee_code_attempts"] = 0
+        return ConversationState.ASK_EMPLOYEE_CODE
 
     async def receive_employee_code(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -153,11 +152,21 @@ class BotHandler:
         attempts = int(context.user_data.get("employee_code_attempts", 0)) + 1
         context.user_data["employee_code_attempts"] = attempts
 
-        if code in self._config.employee_codes or self._database.is_employee_code_allowed(code):
+        employee = self._database.get_employee(code)
+        if employee and employee.get("full_name") and employee.get("department"):
             context.user_data["employee_code"] = code
+            context.user_data["full_name"] = employee["full_name"]
+            context.user_data["department"] = employee["department"]
             context.user_data.pop("employee_code_attempts", None)
-            await update.message.reply_text("Таны овог, нэрээ оруулна уу.")
-            return ConversationState.ASK_NAME
+            await update.message.reply_text(
+                (
+                    f"Сайн байна уу, {employee['full_name']}!\n"
+                    "Таны кодыг баталгаажууллаа.\n"
+                    "Асуудлын төрлөө сонгоно уу."
+                ),
+                reply_markup=ISSUE_KEYBOARD,
+            )
+            return ConversationState.CHOOSE_ISSUE
 
         if attempts >= 3:
             await update.message.reply_text(
@@ -167,30 +176,10 @@ class BotHandler:
             return ConversationHandler.END
 
         await update.message.reply_text(
-            "Ажилтны код буруу байна. Дахин оруулна уу.",
+            "Ажилтны код буруу байна. Менежертэй холбогдож кодоо шалгаад дахин оруулна уу.",
             reply_markup=ReplyKeyboardRemove(),
         )
         return ConversationState.ASK_EMPLOYEE_CODE
-
-    async def receive_name(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> ConversationState:
-        full_name = update.message.text.strip()
-        context.user_data["full_name"] = full_name
-        await update.message.reply_text(
-            "Таны ажиллаж буй бүтцийн нэгжийг бичнэ үү (жишээ нь: Мэдээлэл технологийн тѳв)."
-        )
-        return ConversationState.ASK_DEPARTMENT
-
-    async def receive_department(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> ConversationState:
-        department = update.message.text.strip()
-        context.user_data["department"] = department
-        await update.message.reply_text(
-            "Тулгарсан асуудлын төрлөө сонгоно уу.", reply_markup=ISSUE_KEYBOARD
-        )
-        return ConversationState.CHOOSE_ISSUE
 
     async def choose_issue(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -202,6 +191,13 @@ class BotHandler:
                 "Жагсаалтаас сонголтоо хийнэ үү.", reply_markup=ISSUE_KEYBOARD
             )
             return ConversationState.CHOOSE_ISSUE
+
+        if "full_name" not in context.user_data or "department" not in context.user_data:
+            await update.message.reply_text(
+                "Ажилтны мэдээлэл олдсонгүй. /start командыг ашиглан дахин эхлүүлнэ үү.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            return ConversationHandler.END
 
         context.user_data["issue_category"] = category
         user = update.effective_user
@@ -484,8 +480,92 @@ class BotHandler:
             await update.message.reply_text("Энэ коммандыг ашиглах эрхгүй байна.")
             return
 
-        summary = self._database.summary()
-        lines = [f"Нийт хүлээн авсан дуудлага: {summary['total']}"]
+        await update.message.reply_text(
+            "Тайлан авах хугацаагаа сонгоно уу.", reply_markup=self._report_keyboard
+        )
+
+    async def handle_report_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        query = update.callback_query
+        await query.answer()
+
+        if query.from_user.id != self._config.manager_chat_id:
+            await query.edit_message_text("Энэ үйлдлийг зөвхөн менежер ашиглана.")
+            return
+
+        option = query.data.split(":", maxsplit=1)[-1]
+        now = datetime.now()
+
+        if option == "today":
+            start = end = now
+        elif option == "7d":
+            start = now - timedelta(days=6)
+            end = now
+        elif option == "month":
+            start = now.replace(day=1)
+            end = now
+        elif option == "prev_month":
+            first_this_month = now.replace(day=1)
+            end = first_this_month - timedelta(days=1)
+            start = end.replace(day=1)
+        elif option == "custom":
+            context.user_data["awaiting_report_range"] = True
+            await query.edit_message_text(
+                (
+                    "Хугацаагаа YYYY-MM-DD - YYYY-MM-DD форматтайгаар оруулна уу.\n"
+                    "Жишээ: 2024-05-01 - 2024-05-31"
+                ),
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            return
+        else:
+            await query.edit_message_text("Тодорхойгүй сонголт байна.")
+            return
+
+        await self._send_summary(query.message.chat_id, context, start, end)
+
+    async def receive_report_range(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        if not context.user_data.get("awaiting_report_range"):
+            return
+
+        if update.effective_user.id != self._config.manager_chat_id:
+            return
+
+        text = update.message.text
+        try:
+            start, end = self._parse_date_range(text)
+        except ValueError:
+            await update.message.reply_text(
+                "Огнооны форматыг YYYY-MM-DD - YYYY-MM-DD байдлаар оруулна уу.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            return
+
+        context.user_data.pop("awaiting_report_range", None)
+        await self._send_summary(update.effective_chat.id, context, start, end)
+
+    def _parse_date_range(self, text: str) -> tuple[datetime, datetime]:
+        cleaned = text.replace("–", "-")
+        parts = [segment.strip() for segment in cleaned.split(" - ")]
+        if len(parts) != 2:
+            raise ValueError("invalid format")
+
+        start = datetime.strptime(parts[0], "%Y-%m-%d")
+        end = datetime.strptime(parts[1], "%Y-%m-%d")
+        if start > end:
+            raise ValueError("start after end")
+        return start, end
+
+    def _format_summary(
+        self, summary: Dict[str, object], start: datetime, end: datetime
+    ) -> str:
+        lines = [
+            f"Тайлангийн хугацаа: {start.date()} - {end.date()}",
+            f"Нийт хүлээн авсан дуудлага: {summary['total']}",
+        ]
 
         if summary["by_department"]:
             lines.append("\nБүтцийн нэгжээр:")
@@ -498,11 +578,25 @@ class BotHandler:
                 lines.append(f"- {issue}: {count}")
 
         if summary["statuses"]:
-            lines.append("\nТөлөв:")
+            lines.append("\nСтатус:")
             for status, count in summary["statuses"]:
                 lines.append(f"- {status}: {count}")
 
-        await update.message.reply_text("\n".join(lines))
+        return "\n".join(lines)
+
+    async def _send_summary(
+        self,
+        chat_id: int,
+        context: ContextTypes.DEFAULT_TYPE,
+        start: datetime,
+        end: datetime,
+    ) -> None:
+        summary = self._database.summary_between(start, end)
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=self._format_summary(summary, start, end),
+            reply_markup=self._report_keyboard,
+        )
 
     async def add_employee(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -514,20 +608,27 @@ class BotHandler:
 
         if not context.args or len(context.args) < 2:
             await update.message.reply_text(
-                "Хэрэглээ: /add_employee АЖИЛТНЫ_КОД ОВОГ НЭР"
+                "Хэрэглээ: /add_employee АЖИЛТНЫ_КОД ОВОГ_НЭР; БҮТЦИЙН_НЭГЖ"
             )
             return
 
         code = context.args[0].strip()
-        full_name = " ".join(context.args[1:]).strip()
+        raw_details = " ".join(context.args[1:]).strip()
+        if ";" in raw_details:
+            full_name, _, department = raw_details.partition(";")
+        else:
+            full_name, department = raw_details, ""
+
+        full_name = full_name.strip()
+        department = department.strip()
 
         if not code or not full_name:
             await update.message.reply_text(
-                "Код болон овог нэрийг зөв оруулна уу."
+                "Код болон овог нэрийг зөв оруулна уу. Бүтцийн нэгжийг ';' тэмдэгтээр салгаж бичиж болно."
             )
             return
 
-        created = self._database.add_employee(code, full_name)
+        created = self._database.add_employee(code, full_name, department)
         if created:
             await update.message.reply_text(
                 f"{code} код бүхий {full_name} амжилттай нэмэгдлээ."
@@ -617,12 +718,6 @@ def build_application(config: BotConfig, database: Database, ai: AIAssistant) ->
                     filters.TEXT & ~filters.COMMAND, handler.receive_employee_code
                 )
             ],
-            ConversationState.ASK_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handler.receive_name)
-            ],
-            ConversationState.ASK_DEPARTMENT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handler.receive_department)
-            ],
             ConversationState.CHOOSE_ISSUE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handler.choose_issue)
             ],
@@ -641,6 +736,13 @@ def build_application(config: BotConfig, database: Database, ai: AIAssistant) ->
     )
 
     application = Application.builder().token(config.telegram_token).build()
+    application.add_handler(CallbackQueryHandler(handler.handle_report_callback, pattern=r"^report:"))
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & filters.User(config.manager_chat_id),
+            handler.receive_report_range,
+        )
+    )
     application.add_handler(conversation)
     application.add_handler(CommandHandler("report", handler.report))
     application.add_handler(CommandHandler("add_employee", handler.add_employee))
