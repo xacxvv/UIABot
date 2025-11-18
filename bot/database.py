@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Dict, Iterable
 
 
@@ -272,7 +272,7 @@ class Database:
 
     # Reporting ------------------------------------------------------------
     def _count_for_today(self, engineer_name: str) -> int:
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now().date()
         with self._get_connection() as conn:
             cursor = conn.execute(
                 """
