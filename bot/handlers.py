@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Dict, List
@@ -137,10 +137,22 @@ class BotHandler:
             ]
         )
 
+    def _within_working_hours(self) -> bool:
+        now = datetime.now().time()
+        start = time(9, 0)
+        end = time(18, 0)
+        return start <= now < end
+
     # Conversation flow --------------------------------------------------
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> ConversationState:
         context.user_data.clear()
         user_id = update.effective_user.id if update.effective_user else None
+        if user_id != self._config.manager_chat_id and not self._within_working_hours():
+            await update.message.reply_text(
+                "Уучлаарай, ажлын цаг дууссан байна. Бид 09:00-18:00 цагийн хооронд дуудлага хүлээн авна.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            return ConversationHandler.END
         if self._config.employee_codes or self._database.has_employee_codes():
             await update.message.reply_text(
                 "Сайн байна уу. Та өөрийн ажилтны кодоо оруулна уу.",
@@ -172,7 +184,6 @@ class BotHandler:
                     context.user_data["department"] = employee["department"]
                     await update.message.reply_text(
                         (
-                            f"Сайн байна уу, {employee['full_name']}!\n"
                             "Бүртгэлтэй мэдээлэлтэй тохирлоо.\n"
                             f"- Овог, нэр: {employee['full_name']}\n"
                             f"- Бүтцийн нэгж: {employee['department']}\n"
@@ -184,8 +195,7 @@ class BotHandler:
 
                 await update.message.reply_text(
                     (
-                        f"Сайн байна уу, {employee['full_name']}!\n"
-                        "Бүртгэлтэй мэдээлэл олдлоо.\n"
+                        f"{employee['full_name']} нэртэй ажилтан байна.\n"
                         "Бүтцийн нэгжийг оруулна уу."
                     )
                 )
