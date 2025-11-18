@@ -156,6 +156,30 @@ class BotHandler:
         if code in self._config.employee_codes or self._database.is_employee_code_allowed(code):
             context.user_data["employee_code"] = code
             context.user_data.pop("employee_code_attempts", None)
+            employee = self._database.get_employee(code)
+            if employee and employee.get("full_name"):
+                context.user_data["full_name"] = employee["full_name"]
+                if employee.get("department"):
+                    context.user_data["department"] = employee["department"]
+                    await update.message.reply_text(
+                        (
+                            "Бүртгэлтэй мэдээлэлтэй тохирлоо.\n"
+                            f"- Овог, нэр: {employee['full_name']}\n"
+                            f"- Бүтцийн нэгж: {employee['department']}\n"
+                            "Асуудлын төрлөө сонгоно уу."
+                        ),
+                        reply_markup=ISSUE_KEYBOARD,
+                    )
+                    return ConversationState.CHOOSE_ISSUE
+
+                await update.message.reply_text(
+                    (
+                        f"{employee['full_name']} нэртэй ажилтан байна.\n"
+                        "Бүтцийн нэгжийг оруулна уу."
+                    )
+                )
+                return ConversationState.ASK_DEPARTMENT
+
             await update.message.reply_text("Таны овог, нэрээ оруулна уу.")
             return ConversationState.ASK_NAME
 
@@ -514,20 +538,27 @@ class BotHandler:
 
         if not context.args or len(context.args) < 2:
             await update.message.reply_text(
-                "Хэрэглээ: /add_employee АЖИЛТНЫ_КОД ОВОГ НЭР"
+                "Хэрэглээ: /add_employee АЖИЛТНЫ_КОД ОВОГ_НЭР; БҮТЦИЙН_НЭГЖ"
             )
             return
 
         code = context.args[0].strip()
-        full_name = " ".join(context.args[1:]).strip()
+        raw_details = " ".join(context.args[1:]).strip()
+        if ";" in raw_details:
+            full_name, _, department = raw_details.partition(";")
+        else:
+            full_name, department = raw_details, ""
+
+        full_name = full_name.strip()
+        department = department.strip()
 
         if not code or not full_name:
             await update.message.reply_text(
-                "Код болон овог нэрийг зөв оруулна уу."
+                "Код болон овог нэрийг зөв оруулна уу. Бүтцийн нэгжийг ';' тэмдэгтээр салгаж бичиж болно."
             )
             return
 
-        created = self._database.add_employee(code, full_name)
+        created = self._database.add_employee(code, full_name, department)
         if created:
             await update.message.reply_text(
                 f"{code} код бүхий {full_name} амжилттай нэмэгдлээ."

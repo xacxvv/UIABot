@@ -51,7 +51,8 @@ class Database:
                 """
                 CREATE TABLE IF NOT EXISTS employee_codes (
                     code TEXT PRIMARY KEY,
-                    full_name TEXT NOT NULL
+                    full_name TEXT NOT NULL,
+                    department TEXT
                 )
                 """
             )
@@ -64,6 +65,16 @@ class Database:
             if "employee_code" not in columns:
                 conn.execute(
                     "ALTER TABLE calls ADD COLUMN employee_code TEXT"
+                )
+                conn.commit()
+
+            employee_columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(employee_codes)").fetchall()
+            }
+            if "department" not in employee_columns:
+                conn.execute(
+                    "ALTER TABLE employee_codes ADD COLUMN department TEXT"
                 )
                 conn.commit()
 
@@ -82,12 +93,14 @@ class Database:
             )
             return cursor.fetchone() is not None
 
-    def add_employee(self, code: str, full_name: str) -> bool:
+    def add_employee(self, code: str, full_name: str, department: str | None) -> bool:
         """Add or update an employee record.
 
         Returns ``True`` when a new record was created and ``False`` when an
         existing record was updated.
         """
+
+        department = department.strip() if department else None
 
         with self._get_connection() as conn:
             existing = conn.execute(
@@ -96,14 +109,32 @@ class Database:
             ).fetchone()
             conn.execute(
                 """
-                INSERT INTO employee_codes (code, full_name)
-                VALUES (?, ?)
-                ON CONFLICT(code) DO UPDATE SET full_name = excluded.full_name
+                INSERT INTO employee_codes (code, full_name, department)
+                VALUES (?, ?, ?)
+                ON CONFLICT(code) DO UPDATE
+                    SET full_name = excluded.full_name,
+                        department = COALESCE(excluded.department, employee_codes.department)
                 """,
-                (code, full_name),
+                (code, full_name, department),
             )
             conn.commit()
             return existing is None
+
+    def get_employee(self, code: str) -> Dict[str, str] | None:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT code, full_name, department FROM employee_codes WHERE code = ?",
+                (code,),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return {
+            "code": row["code"],
+            "full_name": row["full_name"],
+            "department": row["department"],
+        }
 
     @contextmanager
     def _get_connection(self) -> Iterable[sqlite3.Connection]:
